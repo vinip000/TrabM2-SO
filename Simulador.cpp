@@ -189,6 +189,9 @@ void Simulador::executar() {
     cout << "Penalidade de I/O: " << penalidade_io << " ticks" << endl;
     cout << "===================================" << endl;
 
+    int id_processo_cpu = -1;
+    int quantum_usado = 0;
+
     while (!todosFinalizados()) {
         cout << endl;
         cout << "----------- CLOCK " << tempo << " -----------" << endl;
@@ -196,118 +199,106 @@ void Simulador::executar() {
         atualizarChegadas();
         atualizarBloqueados();
 
-        if (fila_prontos.empty()) {
-            cout << "[Tempo " << tempo << "] CPU ociosa." << endl;
-            imprimirRAM();
-            tempo++;
-            continue;
-        }
-
-        int id_atual = fila_prontos.front();
-        fila_prontos.pop();
-
-        Processo& processo = processos[id_atual];
-
-        if (processo.finalizado || processo.bloqueado) {
-            tempo++;
-            continue;
-        }
-
-        cout << "[Tempo " << tempo << "] "
-             << processo.nome << " entrou na CPU."
-             << endl;
-
-        int quantum_usado = 0;
-        bool processo_bloqueado = false;
-
-        while (
-            quantum_usado < quantum &&
-            !processo.finalizado &&
-            !processo_bloqueado
-        ) {
-            cout << endl;
-
-            int pagina_solicitada = processo.paginas[processo.indice_pagina_atual];
-
-            cout << "[Tempo " << tempo << "] "
-                 << processo.nome
-                 << " solicitou pagina " << pagina_solicitada << "."
-                 << endl;
-
-            int indice_ram = buscarPaginaNaRAM(
-                processo.id,
-                pagina_solicitada
-            );
-
-            if (indice_ram != -1) {
-                cout << "[Tempo " << tempo << "] "
-                     << "RAM HIT: pagina " << pagina_solicitada
-                     << " de " << processo.nome
-                     << " ja esta na RAM."
-                     << endl;
-
-                ram[indice_ram].ultimo_uso = tempo;
-
-                processo.indice_pagina_atual++;
-                quantum_usado++;
-
-                if (processo.indice_pagina_atual >= processo.paginas.size()) {
-                    processo.finalizado = true;
-                    processo.tempo_retorno = tempo + 1;
-
-                    cout << "[Tempo " << tempo + 1 << "] "
-                         << processo.nome
-                         << " finalizou sua execucao."
-                         << endl;
-
-                    tempo++;
-                    break;
-                }
-
+        if (id_processo_cpu == -1) {
+            if (fila_prontos.empty()) {
+                cout << "[Tempo " << tempo << "] CPU ociosa." << endl;
+                imprimirRAM();
                 tempo++;
-
-                atualizarChegadas();
-                atualizarBloqueados();
-            } else {
-                cout << "[Tempo " << tempo << "] "
-                     << "PAGE FAULT: pagina " << pagina_solicitada
-                     << " de " << processo.nome
-                     << " nao esta na RAM."
-                     << endl;
-
-                processo.page_faults++;
-
-                carregarPaginaNaRAM(processo, pagina_solicitada);
-
-                processo.tempo_bloqueado_restante = penalidade_io;
-                processo.bloqueado = true;
-                bloqueados.push_back(processo.id);
-
-                cout << "[Tempo " << tempo << "] "
-                     << processo.nome
-                     << " foi para a fila de bloqueados por "
-                     << penalidade_io << " ticks."
-                     << endl;
-
-                processo_bloqueado = true;
-                tempo++;
+                continue;
             }
 
-            imprimirRAM();
+            id_processo_cpu = fila_prontos.front();
+            fila_prontos.pop();
+            quantum_usado = 0;
+
+            cout << "[Tempo " << tempo << "] "
+                 << processos[id_processo_cpu].nome
+                 << " entrou na CPU."
+                 << endl;
         }
 
-        if (
-            !processo.finalizado &&
-            !processo_bloqueado &&
-            quantum_usado == quantum
-        ) {
-            fila_prontos.push(processo.id);
+        Processo& processo = processos[id_processo_cpu];
+
+        if (processo.finalizado || processo.bloqueado) {
+            id_processo_cpu = -1;
+            quantum_usado = 0;
+            tempo++;
+            continue;
+        }
+
+        int pagina_solicitada = processo.paginas[processo.indice_pagina_atual];
+
+        cout << "[Tempo " << tempo << "] "
+             << processo.nome
+             << " solicitou pagina " << pagina_solicitada << "."
+             << endl;
+
+        int indice_ram = buscarPaginaNaRAM(
+            processo.id,
+            pagina_solicitada
+        );
+
+        if (indice_ram != -1) {
+            cout << "[Tempo " << tempo << "] "
+                 << "RAM HIT: pagina " << pagina_solicitada
+                 << " de " << processo.nome
+                 << " ja esta na RAM."
+                 << endl;
+
+            ram[indice_ram].ultimo_uso = tempo;
+
+            processo.indice_pagina_atual++;
+            quantum_usado++;
+
+            if (processo.indice_pagina_atual >= processo.paginas.size()) {
+                processo.finalizado = true;
+                processo.tempo_retorno = tempo + 1;
+
+                cout << "[Tempo " << tempo + 1 << "] "
+                     << processo.nome
+                     << " finalizou sua execucao."
+                     << endl;
+
+                id_processo_cpu = -1;
+                quantum_usado = 0;
+            } else if (quantum_usado == quantum) {
+                fila_prontos.push(processo.id);
+
+                cout << "[Tempo " << tempo + 1 << "] "
+                     << processo.nome
+                     << " sofreu preempcao por fim de Quantum e voltou para a fila de prontos."
+                     << endl;
+
+                id_processo_cpu = -1;
+                quantum_usado = 0;
+            }
+        } else {
+            cout << "[Tempo " << tempo << "] "
+                 << processo.nome
+                 << " sofreu Page Fault na pagina "
+                 << pagina_solicitada << "."
+                 << endl;
+
+            processo.page_faults++;
+
+            carregarPaginaNaRAM(processo, pagina_solicitada);
+
+            processo.tempo_bloqueado_restante = penalidade_io;
+            processo.bloqueado = true;
+            bloqueados.push_back(processo.id);
 
             cout << "[Tempo " << tempo << "] "
                  << processo.nome
-                 << " sofreu preempcao por fim de Quantum e voltou para a fila de prontos."
+                 << " foi para a fila de bloqueados por "
+                 << penalidade_io << " ticks."
                  << endl;
+
+            id_processo_cpu = -1;
+            quantum_usado = 0;
         }
+
+        imprimirRAM();
+        tempo++;
     }
 
     imprimirRelatorioFinal();
